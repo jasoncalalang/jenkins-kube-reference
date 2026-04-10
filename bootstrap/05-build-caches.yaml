@@ -1,0 +1,42 @@
+---
+# Persistent caches for ephemeral agent pods.
+#
+# Gradle and Trivy both download large artifacts on first run (~500MB and
+# ~930MB respectively). Without persistent caches, every build re-downloads
+# them from scratch. These PVCs survive pod teardown so subsequent builds
+# start warm.
+#
+# Both PVCs live in the jenkins namespace (where agent pods are scheduled).
+# ReadWriteOnce is sufficient — Kind schedules all agent pods to the same
+# node pool, so concurrent access from a single node is fine.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: gradle-cache
+  namespace: jenkins
+  labels:
+    app: jenkins
+    purpose: build-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: trivy-cache
+  namespace: jenkins
+  labels:
+    app: jenkins
+    purpose: build-cache
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard
+  resources:
+    requests:
+      storage: 2Gi

@@ -1,0 +1,61 @@
+---
+# Cross-namespace RBAC for the Jenkins ServiceAccount.
+#
+# The Helm chart's built-in rbac.create=true grants Jenkins the rights to
+# create/delete agent pods INSIDE the jenkins namespace. That is enough to
+# run the pipelines. But the pipelines themselves deploy the sample apps
+# into their OWN namespaces (address-book, address-book-ui) via
+# `kubectl apply -f k8s/` inside the kubectl container of the agent pod.
+# That kubectl call uses the `jenkins` ServiceAccount token mounted in the
+# agent pod, so the service account needs cluster-wide rights to manage
+# namespaces, deployments, services, and ingresses.
+#
+# Scope note: this is a learning environment. A production setup should
+# replace the ClusterRole below with a narrower RoleBinding per target
+# namespace, and avoid giving Jenkins cluster-admin-like rights.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: jenkins-deployer
+rules:
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - services
+      - configmaps
+      - secrets
+      - pods
+      - pods/log
+      - events
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - replicasets
+      - statefulsets
+      - daemonsets
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+      - ingressclasses
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["traefik.io", "traefik.containo.us"]
+    resources:
+      - ingressroutes
+      - middlewares
+      - tlsoptions
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: jenkins-deployer
+subjects:
+  - kind: ServiceAccount
+    name: jenkins
+    namespace: jenkins
+roleRef:
+  kind: ClusterRole
+  name: jenkins-deployer
+  apiGroup: rbac.authorization.k8s.io

@@ -1,0 +1,236 @@
+# Helm values for jenkinsci/jenkins chart
+# https://artifacthub.io/packages/helm/jenkinsci/jenkins
+#
+# This configures a Jenkins controller on Kubernetes with:
+#   - JCasC (Configuration as Code) — no clicking required
+#   - Job DSL seeding the address-book-pipeline from GitHub
+#   - Kubernetes plugin for ephemeral agent pods
+#   - A Kaniko podTemplate for in-pod container builds (no Docker-in-Docker)
+
+controller:
+  image:
+    registry: docker.io
+    repository: jenkins/jenkins
+    tag: "lts-jdk21"
+  imagePullPolicy: IfNotPresent
+
+  admin:
+    username: admin
+    password: admin
+
+  # Service exposure — ClusterIP behind an Ingress (see ingress block below)
+  serviceType: ClusterIP
+  servicePort: 8080
+  targetPort: 8080
+
+  # Jenkins' external URL — leave unset so Jenkins derives it from the incoming
+  # request Host header (works with both IP-based and hostname-based access).
+
+  # Ingress via the cluster's Traefik controller.
+  # The Kubernetes Ingress spec requires hostName to be a DNS name (not an IP).
+  # LAN-only options (pick one and override in values.override.yaml):
+  #   1. Use the cluster host's Bonjour/mDNS name, e.g. "my-mac.local" —
+  #      zero workstation setup on macOS/Linux-avahi.
+  #   2. Add a /etc/hosts entry mapping a chosen name (e.g. "jenkins.lan")
+  #      to the cluster host IP on each workstation.
+  #   3. Run a local DNS server (dnsmasq / CoreDNS) that serves a custom
+  #      domain for LAN-wide resolution without per-client setup.
+  # Avoid "*.local" names for non-Bonjour hosts — .local is reserved for mDNS
+  # (RFC 6762) and may shadow or be shadowed by Bonjour on macOS.
+  ingress:
+    enabled: true
+    apiVersion: "networking.k8s.io/v1"
+    ingressClassName: traefik
+    hostName: jenkins.lan
+    path: /
+    annotations: {}
+    # Uncomment to enable TLS (requires cert-manager or a manually-created Secret)
+    # tls:
+    #   - secretName: jenkins-tls
+    #     hosts:
+    #       - jenkins.local
+
+  # Resources (tuned for a small learning cluster; raise for real work)
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+  # Bump startup probe so first boot has time to install plugins + apply JCasC
+  # Default is 12 * 10s = 120s which is too short on cold start.
+  startupProbe:
+    failureThreshold: 60
+    periodSeconds: 10
+    timeoutSeconds: 5
+
+  # Plugins installed at startup
+  installPlugins:
+    - kubernetes:latest
+    - workflow-aggregator:latest
+    - git:latest
+    - configuration-as-code:latest
+    - job-dsl:latest
+    - pipeline-stage-view:latest
+    - warnings-ng:latest
+    - htmlpublisher:latest
+    - junit:latest
+    - timestamper:latest
+
+  # JCasC config
+  JCasC:
+    defaultConfig: true
+    configScripts:
+      welcome: |
+        jenkins:
+          systemMessage: |
+            Jenkins on Kubernetes — Learning Environment
+            Ephemeral agents, Kaniko builds, in-cluster registry.
+      seed-jobs: |
+        jobs:
+          - script: |
+              // Multibranch project: scans every branch in the repo and runs
+              // Jenkinsfile.kube wherever it's found. Branch → environment
+              // mapping is in the Jenkinsfile itself:
+              //   main → prod, uat → uat, dev → dev, others → build only.
+              multibranchPipelineJob('address-book') {
+                description('Multibranch pipeline for the Address Book Spring Boot API. main→prod, uat, dev → respective namespaces.')
+                branchSources {
+                  git {
+                    id('address-book-git')
+                    remote('https://github.com/jasoncalalang/address-book.git')
+                    // ── Branches scanned by the multibranch pipeline ──
+                    // Static envs: main → prod, uat, dev.
+                    // Per-developer envs: dev2, dev3 (add more as needed).
+                    // To add a developer environment "dev4":
+                    //   1. Append 'dev4' to this string AND the same line in
+                    //      the address-book-ui block below.
+                    //   2. Copy k8s/overlays/dev2 → k8s/overlays/dev4 in BOTH
+                    //      address-book and address-book-ui repos.
+                    //   3. Add `branch 'dev4'` to the when blocks in BOTH
+                    //      Jenkinsfile.kube files.
+                    //   4. Helm-upgrade Jenkins so the new branch enters the
+                    //      scan list (or wait up to 5 min for the periodic
+                    //      reload).
+                    // To remove one, see README "Per-developer environments".
+                    includes('main uat dev dev2 dev3')
+                  }
+                }
+                factory {
+                  workflowBranchProjectFactory {
+                    scriptPath('Jenkinsfile.kube')
+                  }
+                }
+                triggers {
+                  periodicFolderTrigger {
+                    interval('5m')
+                  }
+                }
+                orphanedItemStrategy {
+                  discardOldItems {
+                    numToKeep(5)
+                  }
+                }
+              }
+
+              multibranchPipelineJob('address-book-ui') {
+                description('Multibranch pipeline for the Address Book React+Vite UI. main→prod, uat, dev → respective namespaces.')
+                branchSources {
+                  git {
+                    id('address-book-ui-git')
+                    remote('https://github.com/jasoncalalang/address-book-ui.git')
+                    // Keep this includes(...) list in sync with the
+                    // address-book block above. See its comment for the
+                    // copy-paste recipe to add a new developer environment.
+                    includes('main uat dev dev2 dev3')
+                  }
+                }
+                factory {
+                  workflowBranchProjectFactory {
+                    scriptPath('Jenkinsfile.kube')
+                  }
+                }
+                triggers {
+                  periodicFolderTrigger {
+                    interval('5m')
+                  }
+                }
+                orphanedItemStrategy {
+                  discardOldItems {
+                    numToKeep(5)
+                  }
+                }
+              }
+
+# Ephemeral agents managed by the Kubernetes plugin
+agent:
+  enabled: true
+
+  # The Kaniko podTemplate — fat enough to run the full address-book pipeline:
+  # jnlp (Jenkins agent) + build (Java/Gradle) + kaniko (image build) +
+  # kubectl (deploy). The Jenkinsfile uses `container('name')` to pick which
+  # container runs each step.
+  podTemplates:
+    kaniko: |
+      - name: kaniko
+        label: kaniko
+        serviceAccount: jenkins
+        yamlMergeStrategy: override
+        volumes:
+          - persistentVolumeClaim:
+              claimName: gradle-cache
+              mountPath: /home/gradle/.gradle
+          - persistentVolumeClaim:
+              claimName: trivy-cache
+              mountPath: /root/.cache/trivy
+        containers:
+          - name: jnlp
+            image: jenkins/inbound-agent:latest
+            ttyEnabled: true
+          - name: build
+            image: eclipse-temurin:21-jdk
+            command: "cat"
+            ttyEnabled: true
+            envVars:
+              - envVar:
+                  key: GRADLE_USER_HOME
+                  value: /home/gradle/.gradle
+          - name: kaniko
+            image: gcr.io/kaniko-project/executor:debug
+            command: "/busybox/cat"
+            ttyEnabled: true
+            privileged: false
+          - name: kubectl
+            image: bitnami/kubectl:latest
+            command: "cat"
+            ttyEnabled: true
+            # bitnami/kubectl runs as UID 1001 by default, which can't write
+            # to the workspace (owned by UID 1000 from the jnlp init container).
+            # Run as root to avoid the permission mismatch.
+            runAsUser: "0"
+            runAsGroup: "0"
+          - name: trivy
+            image: ghcr.io/aquasecurity/trivy:latest
+            command: "cat"
+            ttyEnabled: true
+            # Trivy needs root to pull and unpack image layers for scanning.
+            runAsUser: "0"
+            runAsGroup: "0"
+
+# Persistent storage for jenkins_home (plugins, job history, credentials)
+persistence:
+  enabled: true
+  storageClass: standard
+  size: 4Gi
+  accessMode: ReadWriteOnce
+
+# RBAC so Jenkins can spawn agent pods
+rbac:
+  create: true
+  readSecrets: true
+
+serviceAccount:
+  create: true
+  name: jenkins

@@ -1,0 +1,14 @@
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+*.iml
+
+# Helm
+charts/
+*.tgz
+
+# Local overrides
+values.local.yaml
+values.override.yaml
