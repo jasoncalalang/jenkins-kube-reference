@@ -127,7 +127,7 @@ controller:
                 }
                 triggers {
                   periodicFolderTrigger {
-                    interval('5m')
+                    interval('1m')
                   }
                 }
                 orphanedItemStrategy {
@@ -156,7 +156,7 @@ controller:
                 }
                 triggers {
                   periodicFolderTrigger {
-                    interval('5m')
+                    interval('1m')
                   }
                 }
                 orphanedItemStrategy {
