@@ -16,38 +16,32 @@ The Kubernetes-native sibling to [jenkins-reference](https://github.com/jasoncal
 
 ## Architecture
 
-```
-namespace: jenkins
-  ┌────────────────────────────────────┐
-  │ jenkins (StatefulSet + PVC + Svc)  │
-  │                                    │
-  │   spawns per build ──►             │
-  │       ┌──────────────────────────┐ │
-  │       │ agent pod                │ │
-  │       │  jnlp │ build │ kaniko   │ │
-  │       │       │ trivy │ kubectl  │ │
-  │       └──────────┴───────────────┘ │
-  │              │                     │
-  └──────────────┼─────────────────────┘
-                 │ docker push
-                 ▼
-  namespace: build
-  ┌────────────────────────────────────┐
-  │ registry (in-cluster OCI registry) │
-  │    Svc NodePort :30500             │
-  └────────────────────────────────────┘
-                 │ docker pull (via containerd mirror)
-                 ▼
-  namespace: dev / uat / prod   (one per environment)
-  ┌────────────────────────────────────┐
-  │ address-book     (Deployment + Svc + Ingress)
-  │ address-book-ui  (Deployment + Svc + Ingress)
-  │                                    │
-  │ ui's BFF reaches the api at        │
-  │    http://address-book             │
-  │ (same-namespace short DNS — works  │
-  │  identically in all 3 environments)│
-  └────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph jenkins-ns["namespace: jenkins"]
+        controller["Jenkins Controller<br/>(StatefulSet + PVC + Svc)"]
+        controller -- "spawns per build" --> agent
+        subgraph agent["Agent Pod"]
+            jnlp[jnlp]
+            build[build]
+            kaniko[kaniko]
+            trivy[trivy]
+            kubectl[kubectl]
+        end
+    end
+
+    subgraph build-ns["namespace: build"]
+        registry["Registry<br/>(in-cluster OCI registry)<br/>Svc NodePort :30500"]
+    end
+
+    subgraph app-ns["namespace: dev / uat / prod"]
+        app["address-book<br/>(Deployment + Svc + Ingress)"]
+        ui["address-book-ui<br/>(Deployment + Svc + Ingress)"]
+        ui -- "http://address-book<br/>(same-namespace short DNS)" --> app
+    end
+
+    agent -- "docker push" --> registry
+    registry -- "docker pull<br/>(via containerd mirror)" --> app-ns
 ```
 
 ## Branching & promotion
