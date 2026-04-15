@@ -73,6 +73,7 @@ controller:
     - kubernetes:latest
     - workflow-aggregator:latest
     - git:latest
+    - github:latest
     - configuration-as-code:latest
     - job-dsl:latest
     - pipeline-stage-view:latest
@@ -125,11 +126,6 @@ controller:
                     scriptPath('Jenkinsfile.kube')
                   }
                 }
-                triggers {
-                  periodicFolderTrigger {
-                    interval('1m')
-                  }
-                }
                 orphanedItemStrategy {
                   discardOldItems {
                     numToKeep(5)
@@ -152,11 +148,6 @@ controller:
                 factory {
                   workflowBranchProjectFactory {
                     scriptPath('Jenkinsfile.kube')
-                  }
-                }
-                triggers {
-                  periodicFolderTrigger {
-                    interval('1m')
                   }
                 }
                 orphanedItemStrategy {
